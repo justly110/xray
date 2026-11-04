@@ -11,8 +11,8 @@
 # 7. Xray 内核与管理脚本在线独立检查升级
 # ==============================================================================
 
-SCRIPT_VERSION="0.0.17"
-SCRIPT_URL="https://github.com/justly110/reality/raw/main/xray.sh"
+SCRIPT_VERSION="0.0.18"
+SCRIPT_URL="https://github.com/justly110/xray/raw/main/reality.sh"
 
 ENV_FILE="/usr/local/etc/xray/params.env"
 CONFIG_FILE="/usr/local/etc/xray/config.json"
@@ -395,8 +395,8 @@ write_management_cli() {
     cat > /usr/local/bin/xray << 'EOF_MANAGEMENT_SCRIPT'
 #!/bin/bash
 
-SCRIPT_VERSION="0.0.17"
-SCRIPT_URL="https://github.com/justly110/reality/raw/main/xray.sh"
+SCRIPT_VERSION="0.0.18"
+SCRIPT_URL="https://github.com/justly110/xray/raw/main/reality.sh"
 
 ENV_FILE="/usr/local/etc/xray/params.env"
 CONFIG_FILE="/usr/local/etc/xray/config.json"
@@ -911,7 +911,7 @@ update_menu() {
         echo "           Xray 与管理脚本在线更新        "
         echo "=========================================="
         echo " 1. 单独检查并更新 Xray 内核 (xray-core)"
-        echo " 2. 单独检查并更新 管理脚本 (xray.sh)"
+        echo " 2. 单独检查并更新 管理脚本 (reality.sh)"
         echo " 3. 一键检查并更新全部 (内核 + 脚本)"
         echo " 0. 返回主菜单"
         echo "=========================================="

@@ -36,7 +36,7 @@
 - 📉 **极低资源自适应（小鸡友好）**：
   - 识别物理内存 $\le 256\text{MB}$ 环境，自动注入 Go 运行时内存防 OOM 调优参数，杜绝因瞬时握手导致的内存溢出杀进程。
 - 🔄 **双独立在线平滑升级**：
-  - 内核（`xray-core`）与管理脚本（`xray.sh`）支持在线独立一键检测与平滑升级，无需重复配置。
+  - 内核（`xray-core`）与管理脚本（`reality.sh`）支持在线独立一键检测与平滑升级，无需重复配置。
 - 🌐 **双系统全环境支持**：
   - 完美适配基于 **Systemd** 的发行版（Debian 10+ / Ubuntu 20.04+）。
   - 原生适配基于 **OpenRC** 的超轻量发行版（Alpine Linux）。
@@ -50,12 +50,12 @@
 在服务器终端中以 `root` 权限运行以下指令即可：
 
 ```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/justly110/reality/main/xray.sh)
+bash <(curl -fsSL https://raw.githubusercontent.com/justly110/xray/main/reality.sh)
 ```
 
 > **备用命令（通过 wget）：**
 > ```bash
-> wget -O xray.sh https://raw.githubusercontent.com/justly110/reality/main/xray.sh && bash xray.sh
+> wget -O reality.sh https://raw.githubusercontent.com/justly110/xray/main/reality.sh && bash reality.sh
 > ```
 
 ---
