@@ -764,6 +764,7 @@ tunnel_settings() {
             1)
                 if [ "$CF_PROTOCOL" = "http2" ]; then CF_PROTOCOL="quic"; else CF_PROTOCOL="http2"; fi
                 save_env; apply_all; ok "✔ 传输协议已切换为 $CF_PROTOCOL"
+                wait_host && update_links >/dev/null 2>&1
                 pause; return
                 ;;
             2)
@@ -773,6 +774,7 @@ tunnel_settings() {
                     *)    CF_EDGE_IP=auto ;;
                 esac
                 save_env; apply_all; ok "✔ 边缘 IP 版本已切换为 $CF_EDGE_IP"
+                wait_host && update_links >/dev/null 2>&1
                 pause; return
                 ;;
             3)
