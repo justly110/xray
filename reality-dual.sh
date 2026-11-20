@@ -3,7 +3,7 @@
 # VLESS-Reality 直连版 (Debian & Alpine + IPv4/IPv6 双栈)
 # 特性：
 # 1. 首页清晰显示管理脚本版本与 Xray 内核版本
-# 2. IPv4 (0.0.0.0:443) 与 IPv6 ([::]:8443) 各自独立端口与入站监听
+# 2. IPv4 (0.0.0.0:443) 与 IPv6 ([::]:8443) 各自独立端口与入站监听，出站统一 UseIPv4 避免双栈横跳风控
 # 3. 深度网络内核调优 (32MB TCP 动态缓冲区 + BBR + FQ，适配高延迟长肥管道)
 # 4. Xray 传输层性能调优 (启用 TCP Fast Open + 15s KeepAlive，禁用服务端嗅探)
 # 5. TCP BBR 状态检测、环境识别与一键网络加速调优
@@ -12,7 +12,7 @@
 # 8. Xray 内核与管理脚本在线独立检查升级
 # ==============================================================================
 
-SCRIPT_VERSION="0.0.2"
+SCRIPT_VERSION="0.0.3"
 SCRIPT_URL="https://github.com/justly110/xray/raw/main/reality-dual.sh"
 
 ENV_FILE="/usr/local/etc/xray/params.env"
@@ -292,7 +292,7 @@ render_config_json() {
         echo '  "log": {"loglevel": "warning"},'
         echo "  \"inbounds\": $(build_inbounds_json "$PORT" "$PORT_V6" "$DEST_SNI" "$UUID_DIRECT" "$PRIVATE_KEY" "$SHORT_ID"),"
         echo '  "outbounds": ['
-        echo '    {"protocol": "freedom", "tag": "direct"}'
+        echo '    {"protocol": "freedom", "tag": "direct", "settings": {"domainStrategy": "UseIPv4"}}'
         echo '  ],'
         echo '  "routing": {'
         echo '    "rules": ['
@@ -424,6 +424,7 @@ update_links_info() {
         fi
         echo "- IPv4 端口: ${PORT}"
         [ "$v6_active" -eq 1 ] && echo "- IPv6 端口: ${PORT_V6}"
+        echo "- 出站策略: UseIPv4 (IPv4 优先出站，纯 IPv6 目标自动回退)"
         echo "- 伪装域名 (SNI): ${DEST_SNI}"
         echo "- 公钥 (pbk): ${PUBLIC_KEY}"
         echo "- ShortId: ${SHORT_ID}"
@@ -456,7 +457,7 @@ write_management_cli() {
     cat > /usr/local/bin/xray << 'EOF_MANAGEMENT_SCRIPT'
 #!/bin/bash
 
-SCRIPT_VERSION="0.0.2"
+SCRIPT_VERSION="0.0.3"
 SCRIPT_URL="https://github.com/justly110/xray/raw/main/reality-dual.sh"
 
 ENV_FILE="/usr/local/etc/xray/params.env"
@@ -772,7 +773,7 @@ rebuild_and_apply() {
         echo '  "log": {"loglevel": "warning"},'
         echo "  \"inbounds\": $(build_inbounds_json "$PORT" "$PORT_V6" "$DEST_SNI" "$UUID_DIRECT" "$PRIVATE_KEY" "$SHORT_ID"),"
         echo '  "outbounds": ['
-        echo '    {"protocol": "freedom", "tag": "direct"}'
+        echo '    {"protocol": "freedom", "tag": "direct", "settings": {"domainStrategy": "UseIPv4"}}'
         echo '  ],'
         echo '  "routing": {'
         echo '    "rules": ['
@@ -839,6 +840,7 @@ rebuild_and_apply() {
         fi
         echo "- IPv4 端口: ${PORT}"
         [ "$v6_active" -eq 1 ] && echo "- IPv6 端口: ${PORT_V6}"
+        echo "- 出站策略: UseIPv4 (IPv4 优先出站，纯 IPv6 目标自动回退)"
         echo "- 伪装域名 (SNI): ${DEST_SNI}"
         echo "- 公钥 (pbk): ${PUBLIC_KEY}"
         echo "- ShortId: ${SHORT_ID}"
