@@ -11,7 +11,7 @@
 # 7. Xray 内核与管理脚本在线独立检查升级
 # ==============================================================================
 
-SCRIPT_VERSION="0.0.19"
+SCRIPT_VERSION="0.0.20"
 SCRIPT_URL="https://github.com/justly110/xray/raw/main/reality.sh"
 
 ENV_FILE="/usr/local/etc/xray/params.env"
@@ -395,7 +395,7 @@ write_management_cli() {
     cat > /usr/local/bin/xray << 'EOF_MANAGEMENT_SCRIPT'
 #!/bin/bash
 
-SCRIPT_VERSION="0.0.19"
+SCRIPT_VERSION="0.0.20"
 SCRIPT_URL="https://github.com/justly110/xray/raw/main/reality.sh"
 
 ENV_FILE="/usr/local/etc/xray/params.env"
@@ -866,7 +866,8 @@ check_and_update_script() {
     echo "           检查管理脚本更新               "
     echo "=========================================="
     echo "当前本地脚本版本: $SCRIPT_VERSION"
-    local remote_ver=$(curl -sL -m 8 "$SCRIPT_URL" 2>/dev/null | grep -m 1 '^SCRIPT_VERSION=' | cut -d'"' -f2)
+    local fetch_url="${SCRIPT_URL}?t=$(date +%s)"
+    local remote_ver=$(curl -sL -m 8 "$fetch_url" 2>/dev/null | grep -m 1 '^SCRIPT_VERSION=' | cut -d'"' -f2)
 
     if [ -z "$remote_ver" ]; then
         echo -e "\033[31m❌ 无法获取远程版本，请检查网络！\033[0m"
@@ -886,7 +887,7 @@ check_and_update_script() {
     fi
 
     echo -e "\n⏳ 正在拉取最新脚本并平滑升级..."
-    if curl -fsSL "$SCRIPT_URL" -o /tmp/xray_new.sh \
+    if curl -fsSL "$fetch_url" -o /tmp/xray_new.sh \
         && grep -q '^SCRIPT_VERSION="' /tmp/xray_new.sh \
         && grep -q 'write_management_cli' /tmp/xray_new.sh; then
         chmod +x /tmp/xray_new.sh
