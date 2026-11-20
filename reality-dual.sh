@@ -3,7 +3,7 @@
 # VLESS-Reality 直连版 (Debian & Alpine + IPv4/IPv6 双栈)
 # 特性：
 # 1. 首页清晰显示管理脚本版本与 Xray 内核版本
-# 2. 同一端口同时监听 0.0.0.0 与 ::，IPv4/IPv6 各自独立入站
+# 2. IPv4 (0.0.0.0:443) 与 IPv6 ([::]:8443) 各自独立端口与入站监听
 # 3. 深度网络内核调优 (32MB TCP 动态缓冲区 + BBR + FQ，适配高延迟长肥管道)
 # 4. Xray 传输层性能调优 (启用 TCP Fast Open + 15s KeepAlive，禁用服务端嗅探)
 # 5. TCP BBR 状态检测、环境识别与一键网络加速调优
@@ -140,8 +140,10 @@ is_config_complete() {
 }
 
 save_params_env() {
+    PORT_V6="${PORT_V6:-8443}"
     {
         echo "PORT=\"$(env_quote "$PORT")\""
+        echo "PORT_V6=\"$(env_quote "$PORT_V6")\""
         echo "DEST_SNI=\"$(env_quote "$DEST_SNI")\""
         echo "UUID_DIRECT=\"$(env_quote "$UUID_DIRECT")\""
         echo "PUBLIC_KEY=\"$(env_quote "$PUBLIC_KEY")\""
@@ -249,27 +251,27 @@ EOF
 }
 
 build_inbounds_json() {
-    local port="$1"
-    local sni="$2"
-    local u_direct="$3"
-    local priv="$4"
-    local sid="$5"
+    local port_v4="$1"
+    local port_v6="$2"
+    local sni="$3"
+    local u_direct="$4"
+    local priv="$5"
+    local sid="$6"
     local objs=() obj
 
-    # IPv4 与 IPv6 分开监听，避免依赖 net.ipv6.bindv6only 的宿主机行为
-    objs+=("$(emit_inbound_json "vless-v4" "0.0.0.0" "0" "$port" "$priv" "$u_direct" "$sni" "$sid" "direct-local")")
-    if ipv6_enabled; then
-        objs+=("$(emit_inbound_json "vless-v6" "::" "1" "$port" "$priv" "$u_direct" "$sni" "$sid" "direct-local-v6")")
+    # IPv4 与 IPv6 使用独立端口监听，避免 Xray 中 0.0.0.0 默认双栈占位导致同端口绑定冲突
+    objs+=("$(emit_inbound_json "vless-v4" "0.0.0.0" "0" "$port_v4" "$priv" "$u_direct" "$sni" "$sid" "direct-local")")
+    if ipv6_enabled && [ -n "$port_v6" ] && [ "$port_v6" != "$port_v4" ]; then
+        objs+=("$(emit_inbound_json "vless-v6" "::" "1" "$port_v6" "$priv" "$u_direct" "$sni" "$sid" "direct-local-v6")")
     fi
 
-    # 循环追加所有扩展 Reality 节点，每个节点同样生成 IPv4/IPv6 双入站
+    # 扩展 Reality 节点：使用单个入站承接（启用 IPv6 时用 :: 双栈监听，避免同端口双入站冲突）
     if [ -f "$EXTRA_NODES_FILE" ]; then
+        local e_listen="0.0.0.0"
+        ipv6_enabled && e_listen="::"
         while IFS='|' read -r e_port e_uuid e_sid e_sni e_tag; do
             [ -z "$e_port" ] && continue
-            objs+=("$(emit_inbound_json "reality-in-${e_port}-v4" "0.0.0.0" "0" "$e_port" "$priv" "$e_uuid" "$e_sni" "$e_sid" "user-${e_port}")")
-            if ipv6_enabled; then
-                objs+=("$(emit_inbound_json "reality-in-${e_port}-v6" "::" "1" "$e_port" "$priv" "$e_uuid" "$e_sni" "$e_sid" "user-${e_port}-v6")")
-            fi
+            objs+=("$(emit_inbound_json "reality-in-${e_port}" "$e_listen" "0" "$e_port" "$priv" "$e_uuid" "$e_sni" "$e_sid" "user-${e_port}")")
         done < "$EXTRA_NODES_FILE"
     fi
 
@@ -284,10 +286,11 @@ build_inbounds_json() {
 }
 
 render_config_json() {
+    PORT_V6="${PORT_V6:-8443}"
     {
         echo "{"
         echo '  "log": {"loglevel": "warning"},'
-        echo "  \"inbounds\": $(build_inbounds_json "$PORT" "$DEST_SNI" "$UUID_DIRECT" "$PRIVATE_KEY" "$SHORT_ID"),"
+        echo "  \"inbounds\": $(build_inbounds_json "$PORT" "$PORT_V6" "$DEST_SNI" "$UUID_DIRECT" "$PRIVATE_KEY" "$SHORT_ID"),"
         echo '  "outbounds": ['
         echo '    {"protocol": "freedom", "tag": "direct"}'
         echo '  ],'
@@ -380,6 +383,7 @@ clean_traffic_cron() {
 }
 
 update_links_info() {
+    PORT_V6="${PORT_V6:-8443}"
     local ip4 ip6 host4="" host6="" v6_active=0
     ipv6_enabled && v6_active=1
     ip4=$(get_public_ipv4 || true)
@@ -389,7 +393,7 @@ update_links_info() {
 
     local l_direct4="" l_direct6=""
     [ -n "$ip4" ] && l_direct4="vless://${UUID_DIRECT}@${host4}:${PORT}?security=reality&encryption=none&pbk=${PUBLIC_KEY}&headerType=none&fp=chrome&type=tcp&flow=xtls-rprx-vision&sni=${DEST_SNI}&sid=${SHORT_ID}#9929-DE-v4"
-    [ "$v6_active" -eq 1 ] && [ -n "$ip6" ] && l_direct6="vless://${UUID_DIRECT}@${host6}:${PORT}?security=reality&encryption=none&pbk=${PUBLIC_KEY}&headerType=none&fp=chrome&type=tcp&flow=xtls-rprx-vision&sni=${DEST_SNI}&sid=${SHORT_ID}#9929-DE-v6"
+    [ "$v6_active" -eq 1 ] && [ -n "$ip6" ] && l_direct6="vless://${UUID_DIRECT}@${host6}:${PORT_V6}?security=reality&encryption=none&pbk=${PUBLIC_KEY}&headerType=none&fp=chrome&type=tcp&flow=xtls-rprx-vision&sni=${DEST_SNI}&sid=${SHORT_ID}#9929-DE-v6"
 
     {
         echo "=========================================================================="
@@ -414,11 +418,12 @@ update_links_info() {
         echo "- 本机 IPv4: ${ip4:-未检测到 (需手动替换)}"
         echo "- 本机 IPv6: ${ip6:-未检测到}"
         if ipv6_enabled; then
-            echo "- 双栈监听: 0.0.0.0 + :: (同一端口 ${PORT})"
+            echo "- 双栈监听: 0.0.0.0:${PORT} (IPv4) + [::]:${PORT_V6} (IPv6 专用)"
         else
-            echo "- 双栈监听: 当前内核未启用 IPv6，仅监听 0.0.0.0"
+            echo "- 双栈监听: 当前内核未启用 IPv6，仅监听 0.0.0.0:${PORT}"
         fi
-        echo "- Reality 端口: ${PORT}"
+        echo "- IPv4 端口: ${PORT}"
+        [ "$v6_active" -eq 1 ] && echo "- IPv6 端口: ${PORT_V6}"
         echo "- 伪装域名 (SNI): ${DEST_SNI}"
         echo "- 公钥 (pbk): ${PUBLIC_KEY}"
         echo "- ShortId: ${SHORT_ID}"
@@ -513,7 +518,16 @@ link_host() {
 }
 
 load_env() {
-    if [ -f "$ENV_FILE" ]; then source "$ENV_FILE"; else echo "❌ 缺少 $ENV_FILE"; exit 1; fi
+    if [ -f "$ENV_FILE" ]; then
+        source "$ENV_FILE"
+        PORT_V6="${PORT_V6:-8443}"
+        if [ "$PORT_V6" = "$PORT" ]; then
+            [ "$PORT" = "8443" ] && PORT_V6=9443 || PORT_V6=8443
+        fi
+    else
+        echo "❌ 缺少 $ENV_FILE"
+        exit 1
+    fi
 }
 
 get_status() {
@@ -723,21 +737,20 @@ EOF
 }
 
 build_inbounds_json() {
-    local port="$1"; local sni="$2"; local u_direct="$3"; local priv="$4"; local sid="$5"
+    local port_v4="$1"; local port_v6="$2"; local sni="$3"; local u_direct="$4"; local priv="$5"; local sid="$6"
     local objs=() obj
 
-    objs+=("$(emit_inbound_json "vless-v4" "0.0.0.0" "0" "$port" "$priv" "$u_direct" "$sni" "$sid" "direct-local")")
-    if ipv6_enabled; then
-        objs+=("$(emit_inbound_json "vless-v6" "::" "1" "$port" "$priv" "$u_direct" "$sni" "$sid" "direct-local-v6")")
+    objs+=("$(emit_inbound_json "vless-v4" "0.0.0.0" "0" "$port_v4" "$priv" "$u_direct" "$sni" "$sid" "direct-local")")
+    if ipv6_enabled && [ -n "$port_v6" ] && [ "$port_v6" != "$port_v4" ]; then
+        objs+=("$(emit_inbound_json "vless-v6" "::" "1" "$port_v6" "$priv" "$u_direct" "$sni" "$sid" "direct-local-v6")")
     fi
 
     if [ -f "$EXTRA_NODES_FILE" ]; then
+        local e_listen="0.0.0.0"
+        ipv6_enabled && e_listen="::"
         while IFS='|' read -r e_port e_uuid e_sid e_sni e_tag; do
             [ -z "$e_port" ] && continue
-            objs+=("$(emit_inbound_json "reality-in-${e_port}-v4" "0.0.0.0" "0" "$e_port" "$priv" "$e_uuid" "$e_sni" "$e_sid" "user-${e_port}")")
-            if ipv6_enabled; then
-                objs+=("$(emit_inbound_json "reality-in-${e_port}-v6" "::" "1" "$e_port" "$priv" "$e_uuid" "$e_sni" "$e_sid" "user-${e_port}-v6")")
-            fi
+            objs+=("$(emit_inbound_json "reality-in-${e_port}" "$e_listen" "0" "$e_port" "$priv" "$e_uuid" "$e_sni" "$e_sid" "user-${e_port}")")
         done < "$EXTRA_NODES_FILE"
     fi
 
@@ -752,11 +765,12 @@ build_inbounds_json() {
 }
 
 rebuild_and_apply() {
+    PORT_V6="${PORT_V6:-8443}"
     echo -e "\n⏳ 正在更新配置并重启 Xray..."
     {
         echo "{"
         echo '  "log": {"loglevel": "warning"},'
-        echo "  \"inbounds\": $(build_inbounds_json "$PORT" "$DEST_SNI" "$UUID_DIRECT" "$PRIVATE_KEY" "$SHORT_ID"),"
+        echo "  \"inbounds\": $(build_inbounds_json "$PORT" "$PORT_V6" "$DEST_SNI" "$UUID_DIRECT" "$PRIVATE_KEY" "$SHORT_ID"),"
         echo '  "outbounds": ['
         echo '    {"protocol": "freedom", "tag": "direct"}'
         echo '  ],'
@@ -774,6 +788,7 @@ rebuild_and_apply() {
 
     {
         echo "PORT=\"$(env_quote "$PORT")\""
+        echo "PORT_V6=\"$(env_quote "$PORT_V6")\""
         echo "DEST_SNI=\"$(env_quote "$DEST_SNI")\""
         echo "UUID_DIRECT=\"$(env_quote "$UUID_DIRECT")\""
         echo "PUBLIC_KEY=\"$(env_quote "$PUBLIC_KEY")\""
@@ -793,7 +808,7 @@ rebuild_and_apply() {
 
     local l_direct4="" l_direct6=""
     [ -n "$ip4" ] && l_direct4="vless://${UUID_DIRECT}@${host4}:${PORT}?security=reality&encryption=none&pbk=${PUBLIC_KEY}&headerType=none&fp=chrome&type=tcp&flow=xtls-rprx-vision&sni=${DEST_SNI}&sid=${SHORT_ID}#9929-DE-v4"
-    [ "$v6_active" -eq 1 ] && [ -n "$ip6" ] && l_direct6="vless://${UUID_DIRECT}@${host6}:${PORT}?security=reality&encryption=none&pbk=${PUBLIC_KEY}&headerType=none&fp=chrome&type=tcp&flow=xtls-rprx-vision&sni=${DEST_SNI}&sid=${SHORT_ID}#9929-DE-v6"
+    [ "$v6_active" -eq 1 ] && [ -n "$ip6" ] && l_direct6="vless://${UUID_DIRECT}@${host6}:${PORT_V6}?security=reality&encryption=none&pbk=${PUBLIC_KEY}&headerType=none&fp=chrome&type=tcp&flow=xtls-rprx-vision&sni=${DEST_SNI}&sid=${SHORT_ID}#9929-DE-v6"
 
     {
         echo "=========================================================================="
@@ -818,11 +833,12 @@ rebuild_and_apply() {
         echo "- 本机 IPv4: ${ip4:-未检测到 (需手动替换)}"
         echo "- 本机 IPv6: ${ip6:-未检测到}"
         if ipv6_enabled; then
-            echo "- 双栈监听: 0.0.0.0 + :: (同一端口 ${PORT})"
+            echo "- 双栈监听: 0.0.0.0:${PORT} (IPv4) + [::]:${PORT_V6} (IPv6 专用)"
         else
-            echo "- 双栈监听: 当前内核未启用 IPv6，仅监听 0.0.0.0"
+            echo "- 双栈监听: 当前内核未启用 IPv6，仅监听 0.0.0.0:${PORT}"
         fi
-        echo "- Reality 端口: ${PORT}"
+        echo "- IPv4 端口: ${PORT}"
+        [ "$v6_active" -eq 1 ] && echo "- IPv6 端口: ${PORT_V6}"
         echo "- 伪装域名 (SNI): ${DEST_SNI}"
         echo "- 公钥 (pbk): ${PUBLIC_KEY}"
         echo "- ShortId: ${SHORT_ID}"
@@ -862,25 +878,40 @@ modify_config() {
         echo "           修改 Xray 节点配置             "
         echo "=========================================="
         echo " [基础 Reality 设置]"
-        echo " 1. 修改 Reality 端口 (当前: $PORT)"
-        echo " 2. 修改 Reality 伪装域名 SNI (带自动体检，当前: $DEST_SNI)"
-        echo " 3. 重新生成 Reality 密钥对(Keypair)及 ShortID"
+        echo " 1. 修改 IPv4 Reality 端口 (当前: $PORT)"
+        echo " 2. 修改 IPv6 Reality 端口 (当前: $PORT_V6)"
+        echo " 3. 修改 Reality 伪装域名 SNI (带自动体检，当前: $DEST_SNI)"
+        echo " 4. 重新生成 Reality 密钥对(Keypair)及 ShortID"
         echo "------------------------------------------"
         echo " [主节点 UUID 管理]"
-        echo " 4. 重新生成【本机直连】UUID"
-        echo " 5. 手动输入新的【本机直连】UUID"
+        echo " 5. 重新生成【本机直连】UUID"
+        echo " 6. 手动输入新的【本机直连】UUID"
         echo "------------------------------------------"
         echo " 0. 返回主菜单"
         echo "=========================================="
-        read -p "请输入选项 [0-5]: " opt </dev/tty
+        read -p "请输入选项 [0-6]: " opt </dev/tty
         case "$opt" in
             1)
-                read -p "请输入新的端口 (1-65535): " new_port </dev/tty
+                read -p "请输入新的 IPv4 端口 (1-65535): " new_port </dev/tty
                 if [[ "$new_port" =~ ^[0-9]+$ ]] && [ "$new_port" -ge 1 ] && [ "$new_port" -le 65535 ]; then
-                    PORT="$new_port"; rebuild_and_apply; break
+                    if [ "$new_port" = "$PORT_V6" ]; then
+                        echo -e "\033[31mIPv4 与 IPv6 不能使用同一端口（当前 IPv6 为 $PORT_V6）！\033[0m"; sleep 2
+                    else
+                        PORT="$new_port"; rebuild_and_apply; break
+                    fi
                 else echo -e "\033[31m端口不合法！\033[0m"; sleep 1; fi
                 ;;
             2)
+                read -p "请输入新的 IPv6 端口 (1-65535): " new_port_v6 </dev/tty
+                if [[ "$new_port_v6" =~ ^[0-9]+$ ]] && [ "$new_port_v6" -ge 1 ] && [ "$new_port_v6" -le 65535 ]; then
+                    if [ "$new_port_v6" = "$PORT" ]; then
+                        echo -e "\033[31mIPv6 与 IPv4 不能使用同一端口（当前 IPv4 为 $PORT）！\033[0m"; sleep 2
+                    else
+                        PORT_V6="$new_port_v6"; rebuild_and_apply; break
+                    fi
+                else echo -e "\033[31m端口不合法！\033[0m"; sleep 1; fi
+                ;;
+            3)
                 read -p "请输入新的伪装域名 SNI: " new_sni </dev/tty
                 if [ -n "$new_sni" ]; then
                     if verify_sni_health "$new_sni"; then
@@ -888,7 +919,7 @@ modify_config() {
                     fi
                 fi
                 ;;
-            3)
+            4)
                 KEYS=$($XRAY_BIN x25519)
                 PRIVATE_KEY=$(echo "$KEYS" | awk '/^PrivateKey:/ {print $2}')
                 PUBLIC_KEY=$(echo "$KEYS" | awk '/PublicKey|Password/ {print $NF}')
@@ -898,8 +929,8 @@ modify_config() {
                 SHORT_ID=$(openssl rand -hex 8)
                 rebuild_and_apply; break
                 ;;
-            4) UUID_DIRECT=$($XRAY_BIN uuid); rebuild_and_apply; break ;;
-            5)
+            5) UUID_DIRECT=$($XRAY_BIN uuid); rebuild_and_apply; break ;;
+            6)
                 read -p "请输入新的【本机直连】UUID: " custom_uid_dir </dev/tty
                 [ -n "$custom_uid_dir" ] && { UUID_DIRECT="$custom_uid_dir"; rebuild_and_apply; break; }
                 ;;
@@ -1133,7 +1164,12 @@ if is_config_complete; then
     echo -e "\033[32m✔ 检测到本机已存在完整的 Xray Reality 配置！\033[0m"
     echo "=========================================================="
     source "$ENV_FILE"
-    echo "  - 端口: $PORT"
+    PORT_V6="${PORT_V6:-8443}"
+    if [ "$PORT_V6" = "$PORT" ]; then
+        [ "$PORT" = "8443" ] && PORT_V6=9443 || PORT_V6=8443
+    fi
+    echo "  - IPv4 端口: $PORT"
+    echo "  - IPv6 端口: $PORT_V6"
     echo "  - 伪装 SNI: $DEST_SNI"
     echo "  - 本机直连 UUID: $UUID_DIRECT"
     echo "----------------------------------------------------------"
@@ -1187,6 +1223,7 @@ SHORT_ID=$(openssl rand -hex 8)
 
 DEST_SNI="www.java.com"
 PORT=443
+PORT_V6=8443
 
 save_params_env
 
