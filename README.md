@@ -2,7 +2,7 @@
 
 # ⚡ Xray 极速一键部署脚本集
 
-**VLESS-Reality 直连版** · **Cloudflare 临时隧道版 (Argo)**
+**Reality 直连版** · **Reality + Caddy 共存版** · **Reality 双栈版** · **Cloudflare 隧道版 (Argo)**
 
 轻量 · 高性能 · 深度网络调优 · 极简交互 · 64MB 小鸡可用
 
@@ -17,14 +17,16 @@
 
 ## 📖 项目简介
 
-本项目提供两套互相独立、可共存的一键部署方案：
+本项目提供四套一键部署方案，覆盖公网直连、同端口建站伪装、IPv4/IPv6 双栈以及无公网 IP 隧道等常见场景：
 
-| 脚本 | 方案 | 适用场景 |
-| :--- | :--- | :--- |
-| [`reality.sh`](reality.sh) | **VLESS + Reality + Vision 直连** | 有公网 IP 的正常 VPS，追求速度与隐蔽性（推荐主力） |
-| [`argo.sh`](argo.sh) | **Xray + Cloudflare 临时隧道 (Argo)** | **64MB 内存小鸡**、NAT 无公网端口、家宽动态 IP、IP 被墙但能连 Cloudflare |
+| 方案 | 脚本 | 方案说明 | 适用场景 |
+| :--- | :--- | :--- | :--- |
+| **方案一** | [`rea.sh`](rea.sh) | **VLESS + Reality + Vision 直连（纯 IPv4）** | 有公网 IPv4 的常规 VPS，追求速度、简洁与高稳定性 |
+| **方案二** | [`rea-caddy.sh`](rea-caddy.sh) | **VLESS + Reality + Caddy 443 共存（偷自己）** | 本机有网站/反代（如 New-API 3000 端口），想共用 443 并用自有域名伪装（仅 Debian/Ubuntu + x86_64） |
+| **方案三** | [`rea-dual.sh`](rea-dual.sh) | **VLESS + Reality + Vision 双栈（IPv4 + IPv6）** | 同时有公网 IPv4 和 IPv6 的 VPS，独立端口双栈接入、出站统一 `UseIPv4` |
+| **方案四** | [`argo.sh`](argo.sh) | **Xray + Cloudflare 临时/固定隧道 (Argo)** | **64MB 内存小鸡**、NAT 无公网端口、家宽动态 IP、IP 被墙但能连 Cloudflare |
 
-两者都内置**长肥管道网络优化**、**低内存防 OOM 自动保护**、**全终端交互式管理后台**与**在线平滑升级**。
+> **注意**：`rea.sh`、`rea-caddy.sh`、`rea-dual.sh` 均使用 `/usr/local/etc/xray` 与 `xray` 管理命令（三者选其一部署或切换升级）；`argo.sh` 使用独立目录与 `argo` 命令，可与任意 Reality 方案共存。
 
 ---
 
@@ -32,40 +34,38 @@
 
 - 🚀 **深度内核网络调优**：
   - 自动启用 **BBR + FQ** 拥塞控制算法。
-  - 深度注入 **TCP 动态缓冲区** 及长肥管道参数，显著提升高延迟、跨洲跨洋线路的吞吐速度（内存 < 160MB 时自动降为低内存档，避免把内存吃满）。
+  - 深度注入 **TCP 动态缓冲区** 及长肥管道参数（32MB 上限；Argo 版在内存 < 160MB 时自动降为低内存档）。
   - 开启 **TCP Fast Open** 与 TCP KeepAlive，禁用无用服务端嗅探，降低握手延迟与资源开销。
 - 🛡️ **纯粹原生安全**：
-  - Reality 版基于最新官方规范：`VLESS` + `Reality` + `xtls-rprx-vision`，默认伪装 `www.java.com`。
-  - 支持**修改 SNI 自动握手体检**：验证目标站点 TLS 1.3 支持与证书体积（防超 8KB 缓冲区）。
-  - Argo 版 Xray 仅监听 `127.0.0.1`，外部无法直连，杜绝端口暴露；同时拦截内网地址，防 SSRF。
+  - Reality 系列基于最新官方规范：`VLESS` + `Reality` + `xtls-rprx-vision`。
+  - `rea.sh` / `rea-dual.sh` 支持**修改 SNI 自动握手体检**（TLS 1.3 支持与证书体积检测，防超 8KB 缓冲区）。
+  - `rea-caddy.sh` 实现“**443 偷自己**”：Xray 占公网 443，Caddy 自动退守 `127.0.0.1:8443`（保留 80 端口续签证书），内置 `?secret=` 暗号开门 + Cookie + API Key 前缀三重防护，未授权请求统一返回 `404`。
+  - `argo.sh` Xray 仅监听 `127.0.0.1`，外部无法直连，并拦截内网地址防 SSRF。
 - 🖥️ **全终端命令行后台**：
-  - 部署完成后直接在终端输入 `xray`（Reality 版）或 `argo`（隧道版）即可呼出多功能交互式管理菜单。
+  - Reality 系列输入 `xray`、隧道版输入 `argo` 即可呼出交互式管理菜单。
 - 📉 **极低资源自适应（小鸡友好）**：
-  - 识别内存 ≤ 256MB（Reality）/ ≤ 160MB（Argo）环境，自动注入 Go 运行时防 OOM 参数（`GOGC` / `GOMEMLIMIT` / `madvdontneed`）。
-  - Argo 版在内存不足且无 Swap 时，**自动创建 256MB Swap**，64MB 小鸡也能跑起来。
-- 🔄 **双独立在线平滑升级**：
-  - Xray 内核、cloudflared、管理脚本支持在线独立检测与升级，无需重复配置。
-- 🌐 **双系统全环境支持**：
-  - 完美适配 **Systemd** 发行版（Debian 10+ / Ubuntu 20.04+）与 **OpenRC** 超轻量发行版（Alpine Linux）。
+  - 识别低内存环境自动注入 Go 运行时防 OOM 参数（`GOGC` / `GOMEMLIMIT` / `madvdontneed`）；Argo 版支持自动创建 256MB Swap。
+- 🔄 **在线平滑升级**：
+  - Xray 内核、Caddy（APT）、cloudflared 与各自管理脚本均支持在线独立检测与升级。
 
 ---
 
-## 💻 方案一：VLESS-Reality 直连版（reality.sh）
+## 💻 方案一：VLESS-Reality 直连版（rea.sh）
+
+> **适用场景**：纯 IPv4 单栈常规 VPS（支持 Debian / Ubuntu / Alpine，`x86_64` / `arm64`），开箱即用、默认伪装 `www.java.com`。
 
 ### 1. 一键快速安装
 
-在服务器终端中以 `root` 权限运行：
-
 ```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/justly110/xray/main/reality.sh)
+bash <(curl -fsSL https://raw.githubusercontent.com/justly110/xray/main/rea.sh)
 ```
 
 > **备用命令（通过 wget）：**
 > ```bash
-> wget -O reality.sh https://raw.githubusercontent.com/justly110/xray/main/reality.sh && bash reality.sh
+> wget -O rea.sh https://raw.githubusercontent.com/justly110/xray/main/rea.sh && bash rea.sh
 > ```
 
-### 2. 随时呼出管理面板
+### 2. 管理面板
 
 ```bash
 xray
@@ -75,7 +75,7 @@ xray
 ==========================================
       Xray-Reality 直连节点管理后台       
 ==========================================
-程序版本: 脚本 v0.0.19 | 内核 v26.10.21
+程序版本: 脚本 v0.0.20 | 内核 v26.10.21
 服务状态: ● 正在运行 (Running)
 ------------------------------------------
  1. 重启 Xray
@@ -93,7 +93,115 @@ xray
 
 ---
 
-## ☁️ 方案二：Cloudflare 临时隧道版（argo.sh）
+## 🌐 方案二：VLESS-Reality + Caddy 一体化共存版（rea-caddy.sh）
+
+> **适用场景**：在同一台 VPS 上同时部署自建网站/反代（如 3000 端口的 New-API）与 Reality 节点，**共用标准 443 端口并以自有域名作 SNI**（“偷自己”），IP 与域名真实对应、回落零延迟。
+> **环境限制**：仅支持 **Debian / Ubuntu（systemd）+ `x86_64`**；需提前将域名直接解析到本机 IPv4（勿开 CDN 小云朵）并放行 **TCP 80 与 443** 端口。
+
+### 1. 流量架构
+
+```text
+代理客户端 --(VLESS Reality :443, SNI=你的域名)--> Xray (0.0.0.0:443) --(直接代理出站)
+普通访客/API/探测 --(HTTPS :443)--> Xray 识别非代理后透传 --> Caddy (127.0.0.1:8443) --> 后端网站 (127.0.0.1:3000)
+Let's Encrypt 续签 --(HTTP-01 :80)--> Caddy (0.0.0.0:80) 自动完成证书申请与续签
+```
+
+### 2. 一键快速安装
+
+```bash
+bash <(curl -fsSL https://raw.githubusercontent.com/justly110/xray/main/rea-caddy.sh)
+```
+
+安装过程中会引导交互输入：
+1. **网站域名**（自动同步为 Reality 的 SNI，如 `ai.example.com`）
+2. **TLS 证书邮箱**（默认 `admin@你的域名`）
+3. **后台访问暗号 `secret`**（访问 `https://你的域名/?secret=暗号` 种下通行 Cookie 并进入网站，未带凭证一律返回 `404`）
+4. **API Key 允许前缀**（默认 `sk-`，同时匹配 `Authorization: Bearer`、`x-api-key`、`x-goog-api-key`）
+5. **后端反代端口**（默认 `3000`）
+
+> 若系统未安装 Caddy，脚本会自动通过官方 APT 源安装；若是从旧版 `rea.sh`（原 `reality.sh`）直接覆盖运行，会自动备份原 `Caddyfile` 并询问是否复用原有 UUID 与 Reality 密钥。
+
+### 3. 管理面板
+
+```bash
+xray
+```
+
+```text
+==========================================
+   Xray-Reality + Caddy 一体化管理后台    
+==========================================
+版本信息 : 脚本 v1.0.0 | Xray v26.10.21 | Caddy v2.x.x
+Xray 状态: ● 正在运行 (Running)
+Caddy状态: ● 正在运行 (Running)
+------------------------------------------
+ 1. 重启 Xray & Caddy
+ 2. 启动 Xray & Caddy
+ 3. 停止 Xray & Caddy
+ 4. 查看节点链接与 Caddy 防护配置
+ 5. 修改 Xray 节点配置 (端口/UUID/密钥/SNI)
+ 6. 修改 Caddy 网站配置 (域名/暗号/Key前缀/反代端口)
+ 7. TCP BBR 加速与网络调优
+ 8. 检查与升级 (Xray / Caddy / 管理脚本)
+ 9. 查看运行日志 (Xray / Caddy)
+10. 彻底卸载
+ 0. 退出菜单
+==========================================
+```
+
+---
+
+## 🔀 方案三：VLESS-Reality 双栈直连版（rea-dual.sh）
+
+> **适用场景**：同时拥有公网 IPv4 与 IPv6 的 VPS（支持 Debian / Ubuntu / Alpine，`x86_64` / `arm64`），需要**同时输出 IPv4 与 IPv6 两条节点链接**，分别应付不同网络环境。
+
+### 1. 一键快速安装
+
+```bash
+bash <(curl -fsSL https://raw.githubusercontent.com/justly110/xray/main/rea-dual.sh)
+```
+
+> **备用命令（通过 wget）：**
+> ```bash
+> wget -O rea-dual.sh https://raw.githubusercontent.com/justly110/xray/main/rea-dual.sh && bash rea-dual.sh
+> ```
+
+### 2. 特性与工作原理
+
+- **双栈独立端口监听**：IPv4 监听 `0.0.0.0:443`，IPv6 启用 `v6only` 监听 `[::]:8443`（可在菜单中分别修改端口），避免 Xray 默认双栈占位引起绑定冲突。
+- **出站统一 `UseIPv4`**：无论客户端从 IPv4 还是 IPv6 入口连入，出站策略统一优先走 IPv4（纯 IPv6 目标自动回退），避免访问流媒体或 AI 服务时 IPv4/IPv6 横跳触发风控。
+- **双链接自动生成**：`link.txt` 同时输出 `-v4` 与 `-v6` 两条节点链接；若机器未开启 IPv6 则自动退化为仅监听 IPv4。
+
+### 3. 管理面板
+
+```bash
+xray
+```
+
+```text
+==========================================
+     Xray-Reality 双栈节点管理后台        
+==========================================
+程序版本: 脚本 v0.0.3 | 内核 v26.10.21
+服务状态: ● 正在运行 (Running)
+网络协议: IPv4 + IPv6 双栈
+------------------------------------------
+ 1. 重启 Xray
+ 2. 启动 Xray
+ 3. 停止 Xray
+ 4. 查看全部节点链接及详细配置
+ 5. 修改主节点配置 (端口/SNI/UUID/密钥)
+ 6. TCP BBR 加速与网络调优
+ 7. 检查与升级 (Xray内核 / 管理脚本)
+ 8. 查看运行日志
+ 9. 彻底卸载 Xray
+ 0. 退出菜单
+==========================================
+```
+
+---
+
+## ☁️ 方案四：Cloudflare 临时隧道版（argo.sh）
 
 > **典型用户**：64MB 内存的 Alpine 小鸡、只有 IPv6 的机器、NAT 小鸡没有任何可用入站端口、家宽动态 IP、IP 被墙但能访问 Cloudflare 的机器。
 > 不需要公网 IP、不需要开放入站端口、不需要域名，也不需要 Cloudflare 账号。
@@ -180,26 +288,27 @@ argo --link
 
 ### 6. 说明与限制
 
-- TryCloudflare 免费隧道有带宽与连接数限制，**适合个人轻量使用与应急备用**；大流量、长期主力请用 `reality.sh` 直连版。
+- TryCloudflare 免费隧道有带宽与连接数限制，**适合个人轻量使用与应急备用**；大流量、长期主力请用 Reality 直连系列方案。
 - 免费隧道不保证稳定性，Cloudflare 可随时调整策略。
-- 两种方案可以装在同一台机器上（服务名、目录、二进制完全隔离），互不干扰。
+- Argo 方案与 Reality 系列可以装在同一台机器上（服务名、目录、二进制完全隔离），互不干扰。
 
 ---
 
 ## 📁 核心文件与路径说明
 
-### Reality 直连版（reality.sh）
+### Reality 系列（`rea.sh` / `rea-caddy.sh` / `rea-dual.sh`）
 
 | 文件路径 | 说明 |
 | :--- | :--- |
 | `/usr/local/bin/xray-core` | Xray 核心执行二进制程序 |
 | `/usr/local/bin/xray` | 面板快捷管理脚本（终端命令 `xray`） |
 | `/usr/local/etc/xray/config.json` | Xray 核心服务端运行配置文件 |
-| `/usr/local/etc/xray/params.env` | 当前节点的核心参数持久化环境变量 |
+| `/usr/local/etc/xray/params.env` | 当前节点（及 Caddy 联动）持久化环境变量 |
 | `/usr/local/etc/xray/link.txt` | 节点直连链接与参数明细备份 |
 | `/usr/local/etc/xray/extra_nodes.env`| 多端口/多用户扩展节点记录文件 |
+| `/etc/caddy/Caddyfile` | Caddy 配置文件（仅 `rea-caddy.sh` 方案使用） |
 
-### Cloudflare 隧道版（argo.sh）
+### Cloudflare 隧道版（`argo.sh`）
 
 | 文件路径 | 说明 |
 | :--- | :--- |
@@ -213,22 +322,20 @@ argo --link
 | `/var/log/cfargo.log` | 隧道运行日志（含临时域名） |
 | `/swapfile` | 低内存自动创建的 Swap 文件（如有） |
 
-> 服务名：`xrayargo`（Xray 核心）、`cfargo`（隧道）。
-> Systemd：`systemctl status xrayargo cfargo`；OpenRC：`rc-service cfargo status`。
+> Reality 服务名：`xray`（`systemctl status xray`）。
+> Argo 服务名：`xrayargo`（Xray 核心）、`cfargo`（隧道）。Systemd：`systemctl status xrayargo cfargo`；OpenRC：`rc-service cfargo status`。
 
 ---
 
 ## ⚙️ 系统要求
 
-- **操作系统**：
-  - Debian 10+
-  - Ubuntu 20.04+
-  - Alpine Linux 3.16+（64MB 内存实测可用）
-- **CPU 架构**：
-  - `x86_64` / `amd64`
-  - `aarch64` / `arm64`
-  - `armv7l` / `armhf`（仅 argo 隧道版支持）
-- **基础依赖**：脚本会自动检查并安装 `bash`、`curl`、`openssl`、`unzip`、`ca-certificates` 等。
+| 脚本 | 支持系统 | 支持架构 |
+| :--- | :--- | :--- |
+| `rea.sh` / `rea-dual.sh` | Debian 10+ / Ubuntu 20.04+ / Alpine 3.16+ | `x86_64` / `arm64` |
+| `rea-caddy.sh` | Debian 10+ / Ubuntu 20.04+（systemd） | `x86_64` |
+| `argo.sh` | Debian 10+ / Ubuntu 20.04+ / Alpine 3.16+ | `x86_64` / `arm64` / `armv7` |
+
+- **基础依赖**：脚本会自动检查并安装 `bash`、`curl`、`openssl`、`unzip`、`ca-certificates` 等（`rea-caddy.sh` 还会自动安装 `gnupg` 与官方 `caddy`）。
 
 ---
 
