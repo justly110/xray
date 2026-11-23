@@ -6,7 +6,7 @@
 
 轻量 · 高性能 · 深度网络调优 · 极简交互 · 64MB 小鸡可用
 
-[![Xray-core](https://img.shields.io/badge/Xray--core-v26.10.21-blue.svg?logo=github)](https://github.com/XTLS/Xray-core)
+[![Xray-core](https://img.shields.io/badge/Xray--core-v26.11.9-blue.svg?logo=github)](https://github.com/XTLS/Xray-core)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 [![Platform](https://img.shields.io/badge/Platform-Debian%20%7C%20Ubuntu%20%7C%20Alpine-orange.svg)](#-系统要求)
 [![Arch](https://img.shields.io/badge/Arch-x86__64%20%7C%20arm64%20%7C%20armv7-lightgrey.svg)](#-系统要求)
