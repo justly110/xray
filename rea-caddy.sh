@@ -9,7 +9,7 @@
 # 5. Xray 内核、Caddy 与管理脚本在线独立检查升级
 # ==============================================================================
 
-SCRIPT_VERSION="1.0.0"
+SCRIPT_VERSION="1.0.1"
 SCRIPT_URL="https://github.com/justly110/xray/raw/main/rea-caddy.sh"
 
 ENV_FILE="/usr/local/etc/xray/params.env"
@@ -67,8 +67,16 @@ sanitize_domain() {
     d="${d#http://}"
     d="${d#https://}"
     d="${d%%/*}"
+    d="${d%%:*}"
     d="${d//[[:space:]]/}"
     printf '%s' "$d"
+}
+
+validate_domain() {
+    local d="$1"
+    [ -n "$d" ] || return 1
+    [[ "$d" != *..* ]] || return 1
+    [[ "$d" =~ ^[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?$ ]]
 }
 
 validate_safe_token() {
@@ -159,6 +167,8 @@ save_params_env() {
         echo "CADDY_KEY_PREFIX=\"$(env_quote "$CADDY_KEY_PREFIX")\""
         echo "BACKEND_PORT=\"$(env_quote "$BACKEND_PORT")\""
         echo "CADDY_HTTPS_PORT=\"$(env_quote "$CADDY_HTTPS_PORT")\""
+        echo "LOCAL_LOOPBACK_ENABLED=\"$(env_quote "${LOCAL_LOOPBACK_ENABLED:-0}")\""
+        echo "LOCAL_LOOPBACK_DOMAIN=\"$(env_quote "${LOCAL_LOOPBACK_DOMAIN:-}")\""
     } > "$ENV_FILE"
 }
 
@@ -405,16 +415,51 @@ EOF
     echo "]"
 }
 
-render_config_json() {
+write_config_json_body() {
+    local use_final_rules="${1:-1}"
+    local lb_domain=""
+    if [ "${LOCAL_LOOPBACK_ENABLED:-0}" = "1" ] && validate_domain "${LOCAL_LOOPBACK_DOMAIN:-}"; then
+        lb_domain=$(json_escape "$LOCAL_LOOPBACK_DOMAIN")
+    fi
+
     {
         echo "{"
         echo '  "log": {"loglevel": "warning"},'
         echo "  \"inbounds\": $(build_inbounds_json "$PORT" "$DEST_SNI" "$UUID_DIRECT" "$PRIVATE_KEY" "$SHORT_ID" "$CADDY_HTTPS_PORT"),"
         echo '  "outbounds": ['
-        echo '    {"protocol": "freedom", "tag": "direct"}'
+        if [ -n "$lb_domain" ]; then
+            echo '    {"protocol": "freedom", "tag": "direct"},'
+            echo '    {'
+            echo '      "protocol": "freedom",'
+            echo '      "tag": "local-vps",'
+            echo '      "settings": {'
+            if [ "$use_final_rules" = "1" ]; then
+                echo '        "redirect": "127.0.0.1:0",'
+                echo '        "finalRules": ['
+                echo '          {'
+                echo '            "action": "allow",'
+                echo '            "network": "tcp,udp",'
+                echo '            "ip": ["127.0.0.1/32"]'
+                echo '          }'
+                echo '        ]'
+            else
+                echo '        "redirect": "127.0.0.1:0"'
+            fi
+            echo '      }'
+            echo '    }'
+        else
+            echo '    {"protocol": "freedom", "tag": "direct"}'
+        fi
         echo '  ],'
         echo '  "routing": {'
         echo '    "rules": ['
+        if [ -n "$lb_domain" ]; then
+            echo '      {'
+            echo '        "type": "field",'
+            echo "        \"domain\": [\"domain:${lb_domain}\"],"
+            echo '        "outboundTag": "local-vps"'
+            echo '      },'
+        fi
         echo '      {'
         echo '        "type": "field",'
         echo '        "network": "tcp,udp",'
@@ -424,6 +469,15 @@ render_config_json() {
         echo '  }'
         echo "}"
     } > "$CONFIG_FILE"
+}
+
+render_config_json() {
+    write_config_json_body 1
+    if [ "${LOCAL_LOOPBACK_ENABLED:-0}" = "1" ] && [ -x "$XRAY_BIN" ]; then
+        if ! "$XRAY_BIN" run -c "$CONFIG_FILE" -test >/dev/null 2>&1; then
+            write_config_json_body 0
+        fi
+    fi
 }
 
 write_service() {
@@ -493,6 +547,11 @@ update_links_info() {
         echo "- 公钥 (pbk): ${PUBLIC_KEY}"
         echo "- ShortId: ${SHORT_ID}"
         echo "- 本机直连 UUID: ${UUID_DIRECT}"
+        if [ "${LOCAL_LOOPBACK_ENABLED:-0}" = "1" ] && [ -n "${LOCAL_LOOPBACK_DOMAIN:-}" ]; then
+            echo "- 本机回环映射: 已开启 (${LOCAL_LOOPBACK_DOMAIN} / *.${LOCAL_LOOPBACK_DOMAIN} -> 127.0.0.1:原端口)"
+        else
+            echo "- 本机回环映射: 未开启"
+        fi
         echo ""
         echo "--------------------------------------------------------------------------"
         echo "Caddy 网站防护参数："
@@ -579,7 +638,7 @@ write_management_cli() {
     cat > /usr/local/bin/xray << 'EOF_MANAGEMENT_SCRIPT'
 #!/bin/bash
 
-SCRIPT_VERSION="1.0.0"
+SCRIPT_VERSION="1.0.1"
 SCRIPT_URL="https://github.com/justly110/xray/raw/main/rea-caddy.sh"
 
 ENV_FILE="/usr/local/etc/xray/params.env"
@@ -614,8 +673,16 @@ sanitize_domain() {
     d="${d#http://}"
     d="${d#https://}"
     d="${d%%/*}"
+    d="${d%%:*}"
     d="${d//[[:space:]]/}"
     printf '%s' "$d"
+}
+
+validate_domain() {
+    local d="$1"
+    [ -n "$d" ] || return 1
+    [[ "$d" != *..* ]] || return 1
+    [[ "$d" =~ ^[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?$ ]]
 }
 
 validate_safe_token() {
@@ -630,6 +697,8 @@ validate_safe_token() {
 load_env() {
     if [ -f "$ENV_FILE" ]; then
         source "$ENV_FILE"
+        LOCAL_LOOPBACK_ENABLED="${LOCAL_LOOPBACK_ENABLED:-0}"
+        LOCAL_LOOPBACK_DOMAIN="${LOCAL_LOOPBACK_DOMAIN:-}"
     else
         echo "❌ 缺少 $ENV_FILE"
         exit 1
@@ -916,11 +985,11 @@ EOF
     echo "]"
 }
 
-rebuild_and_apply() {
-    echo -e "\n⏳ 正在校验并更新 Caddy 与 Xray 配置..."
-    if ! render_caddyfile; then
-        read -n 1 -s -r -p "按任意键返回..." </dev/tty
-        return 1
+write_config_json_body() {
+    local use_final_rules="${1:-1}"
+    local lb_domain=""
+    if [ "${LOCAL_LOOPBACK_ENABLED:-0}" = "1" ] && validate_domain "${LOCAL_LOOPBACK_DOMAIN:-}"; then
+        lb_domain=$(json_escape "$LOCAL_LOOPBACK_DOMAIN")
     fi
 
     {
@@ -928,10 +997,39 @@ rebuild_and_apply() {
         echo '  "log": {"loglevel": "warning"},'
         echo "  \"inbounds\": $(build_inbounds_json "$PORT" "$DEST_SNI" "$UUID_DIRECT" "$PRIVATE_KEY" "$SHORT_ID" "$CADDY_HTTPS_PORT"),"
         echo '  "outbounds": ['
-        echo '    {"protocol": "freedom", "tag": "direct"}'
+        if [ -n "$lb_domain" ]; then
+            echo '    {"protocol": "freedom", "tag": "direct"},'
+            echo '    {'
+            echo '      "protocol": "freedom",'
+            echo '      "tag": "local-vps",'
+            echo '      "settings": {'
+            if [ "$use_final_rules" = "1" ]; then
+                echo '        "redirect": "127.0.0.1:0",'
+                echo '        "finalRules": ['
+                echo '          {'
+                echo '            "action": "allow",'
+                echo '            "network": "tcp,udp",'
+                echo '            "ip": ["127.0.0.1/32"]'
+                echo '          }'
+                echo '        ]'
+            else
+                echo '        "redirect": "127.0.0.1:0"'
+            fi
+            echo '      }'
+            echo '    }'
+        else
+            echo '    {"protocol": "freedom", "tag": "direct"}'
+        fi
         echo '  ],'
         echo '  "routing": {'
         echo '    "rules": ['
+        if [ -n "$lb_domain" ]; then
+            echo '      {'
+            echo '        "type": "field",'
+            echo "        \"domain\": [\"domain:${lb_domain}\"],"
+            echo '        "outboundTag": "local-vps"'
+            echo '      },'
+        fi
         echo '      {'
         echo '        "type": "field",'
         echo '        "network": "tcp,udp",'
@@ -941,6 +1039,21 @@ rebuild_and_apply() {
         echo '  }'
         echo "}"
     } > "$CONFIG_FILE"
+}
+
+rebuild_and_apply() {
+    echo -e "\n⏳ 正在校验并更新 Caddy 与 Xray 配置..."
+    if ! render_caddyfile; then
+        read -n 1 -s -r -p "按任意键返回..." </dev/tty
+        return 1
+    fi
+
+    write_config_json_body 1
+    if [ "${LOCAL_LOOPBACK_ENABLED:-0}" = "1" ] && [ -x "$XRAY_BIN" ]; then
+        if ! "$XRAY_BIN" run -c "$CONFIG_FILE" -test >/dev/null 2>&1; then
+            write_config_json_body 0
+        fi
+    fi
 
     {
         echo "PORT=\"$(env_quote "$PORT")\""
@@ -956,6 +1069,8 @@ rebuild_and_apply() {
         echo "CADDY_KEY_PREFIX=\"$(env_quote "$CADDY_KEY_PREFIX")\""
         echo "BACKEND_PORT=\"$(env_quote "$BACKEND_PORT")\""
         echo "CADDY_HTTPS_PORT=\"$(env_quote "$CADDY_HTTPS_PORT")\""
+        echo "LOCAL_LOOPBACK_ENABLED=\"$(env_quote "${LOCAL_LOOPBACK_ENABLED:-0}")\""
+        echo "LOCAL_LOOPBACK_DOMAIN=\"$(env_quote "${LOCAL_LOOPBACK_DOMAIN:-}")\""
     } > "$ENV_FILE"
 
     do_restart
@@ -981,6 +1096,11 @@ rebuild_and_apply() {
         echo "- 公钥 (pbk): ${PUBLIC_KEY}"
         echo "- ShortId: ${SHORT_ID}"
         echo "- 本机直连 UUID: ${UUID_DIRECT}"
+        if [ "${LOCAL_LOOPBACK_ENABLED:-0}" = "1" ] && [ -n "${LOCAL_LOOPBACK_DOMAIN:-}" ]; then
+            echo "- 本机回环映射: 已开启 (${LOCAL_LOOPBACK_DOMAIN} / *.${LOCAL_LOOPBACK_DOMAIN} -> 127.0.0.1:原端口)"
+        else
+            echo "- 本机回环映射: 未开启"
+        fi
         echo ""
         echo "--------------------------------------------------------------------------"
         echo "Caddy 网站防护参数："
@@ -1012,10 +1132,64 @@ rebuild_and_apply() {
     read -n 1 -s -r -p "按任意键返回管理菜单..." </dev/tty
 }
 
+configure_local_loopback() {
+    while true; do
+        clear
+        local lb_status="已关闭"
+        if [ "${LOCAL_LOOPBACK_ENABLED:-0}" = "1" ] && [ -n "${LOCAL_LOOPBACK_DOMAIN:-}" ]; then
+            lb_status="已开启 (${LOCAL_LOOPBACK_DOMAIN} -> 127.0.0.1:原端口)"
+        fi
+        echo "=========================================="
+        echo "      本机回环自定义域名 (127.0.0.1)      "
+        echo "=========================================="
+        echo "作用: 代理中访问 自编域名:任意端口 时直连本机 127.0.0.1:对应端口"
+        echo "当前状态: ${lb_status}"
+        echo "------------------------------------------"
+        echo " 1. 开启 / 修改本机回环域名 (支持主域名及子域名)"
+        echo " 2. 关闭本机回环域名映射"
+        echo " 0. 返回上一级"
+        echo "=========================================="
+        read -p "请输入选项 [0-2]: " lb_opt </dev/tty
+        case "$lb_opt" in
+            1)
+                local def_domain="${LOCAL_LOOPBACK_DOMAIN:-vps.ai}"
+                read -p "请输入自定义域名 (直接回车默认 ${def_domain}): " input_lb </dev/tty
+                input_lb="${input_lb:-$def_domain}"
+                input_lb=$(sanitize_domain "$input_lb")
+                if validate_domain "$input_lb"; then
+                    LOCAL_LOOPBACK_ENABLED="1"
+                    LOCAL_LOOPBACK_DOMAIN="$input_lb"
+                    rebuild_and_apply
+                    return 0
+                else
+                    echo -e "\033[31m域名格式不合法，请输入纯域名（如 vps.ai）！\033[0m"
+                    sleep 1
+                fi
+                ;;
+            2)
+                if [ "${LOCAL_LOOPBACK_ENABLED:-0}" = "0" ]; then
+                    echo -e "\033[33m当前已处于关闭状态。\033[0m"
+                    sleep 1
+                else
+                    LOCAL_LOOPBACK_ENABLED="0"
+                    rebuild_and_apply
+                    return 0
+                fi
+                ;;
+            0) return 1 ;;
+            *) echo -e "\033[31m无效输入！\033[0m"; sleep 1 ;;
+        esac
+    done
+}
+
 modify_xray_config() {
     load_env
     while true; do
         clear
+        local lb_summary="已关闭"
+        if [ "${LOCAL_LOOPBACK_ENABLED:-0}" = "1" ] && [ -n "${LOCAL_LOOPBACK_DOMAIN:-}" ]; then
+            lb_summary="已开启 -> ${LOCAL_LOOPBACK_DOMAIN}"
+        fi
         echo "=========================================="
         echo "           修改 Xray 节点配置             "
         echo "=========================================="
@@ -1024,10 +1198,11 @@ modify_xray_config() {
         echo " 3. 重新生成【本机直连】UUID"
         echo " 4. 手动输入新的【本机直连】UUID"
         echo " 5. 自定义伪装域名 SNI (当前: $DEST_SNI)"
+        echo " 6. 本机回环自定义域名开关 (当前: ${lb_summary})"
         echo "------------------------------------------"
         echo " 0. 返回主菜单"
         echo "=========================================="
-        read -p "请输入选项 [0-5]: " opt </dev/tty
+        read -p "请输入选项 [0-6]: " opt </dev/tty
         case "$opt" in
             1)
                 read -p "请输入新的端口 (1-65535，通常保持 443): " new_port </dev/tty
@@ -1057,6 +1232,7 @@ modify_xray_config() {
                     DEST_SNI="$new_sni"; rebuild_and_apply; break
                 fi
                 ;;
+            6) configure_local_loopback && break ;;
             0) break ;;
             *) echo -e "\033[31m无效输入！\033[0m"; sleep 1 ;;
         esac
@@ -1355,7 +1531,7 @@ main_menu() {
         echo " 2. 启动 Xray & Caddy"
         echo " 3. 停止 Xray & Caddy"
         echo " 4. 查看节点链接与 Caddy 防护配置"
-        echo " 5. 修改 Xray 节点配置 (端口/UUID/密钥/SNI)"
+        echo " 5. 修改 Xray 节点配置 (端口/UUID/密钥/SNI/回环域名)"
         echo " 6. 修改 Caddy 网站配置 (域名/暗号/Key前缀/反代端口)"
         echo " 7. TCP BBR 加速与网络调优"
         echo " 8. 检查与升级 (Xray / Caddy / 管理脚本)"
@@ -1397,6 +1573,8 @@ if is_config_complete; then
     echo -e "\033[32m✔ 检测到本机已存在完整的 Reality + Caddy 配置！\033[0m"
     echo "=========================================================="
     source "$ENV_FILE"
+    LOCAL_LOOPBACK_ENABLED="${LOCAL_LOOPBACK_ENABLED:-0}"
+    LOCAL_LOOPBACK_DOMAIN="${LOCAL_LOOPBACK_DOMAIN:-}"
     echo "  - Reality 端口: $PORT"
     echo "  - 网站域名 / SNI: $CADDY_DOMAIN ($DEST_SNI)"
     echo "  - 访问暗号 secret: $CADDY_SECRET"
@@ -1468,6 +1646,8 @@ if [[ ! "$REUSE_KEYS" =~ ^[yY]$ ]]; then
 fi
 
 PORT=443
+LOCAL_LOOPBACK_ENABLED="0"
+LOCAL_LOOPBACK_DOMAIN=""
 prompt_caddy_params
 
 save_params_env

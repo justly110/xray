@@ -11,7 +11,7 @@
 # 7. Xray 内核与管理脚本在线独立检查升级
 # ==============================================================================
 
-SCRIPT_VERSION="0.0.20"
+SCRIPT_VERSION="0.0.21"
 SCRIPT_URL="https://github.com/justly110/xray/raw/main/rea.sh"
 
 ENV_FILE="/usr/local/etc/xray/params.env"
@@ -48,6 +48,23 @@ env_quote() {
     s=${s//\`/\\\`}
     s=${s//$'\n'/ }
     printf '%s' "$s"
+}
+
+sanitize_domain() {
+    local d="$1"
+    d="${d#http://}"
+    d="${d#https://}"
+    d="${d%%/*}"
+    d="${d%%:*}"
+    d="${d//[[:space:]]/}"
+    printf '%s' "$d"
+}
+
+validate_domain() {
+    local d="$1"
+    [ -n "$d" ] || return 1
+    [[ "$d" != *..* ]] || return 1
+    [[ "$d" =~ ^[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?$ ]]
 }
 
 # 深度网络内核调优 (长肥管道与高延迟优化)
@@ -115,6 +132,8 @@ save_params_env() {
         echo "PUBLIC_KEY=\"$(env_quote "$PUBLIC_KEY")\""
         echo "PRIVATE_KEY=\"$(env_quote "$PRIVATE_KEY")\""
         echo "SHORT_ID=\"$(env_quote "$SHORT_ID")\""
+        echo "LOCAL_LOOPBACK_ENABLED=\"$(env_quote "${LOCAL_LOOPBACK_ENABLED:-0}")\""
+        echo "LOCAL_LOOPBACK_DOMAIN=\"$(env_quote "${LOCAL_LOOPBACK_DOMAIN:-}")\""
     } > "$ENV_FILE"
 }
 
@@ -255,16 +274,51 @@ EOF
     echo "]"
 }
 
-render_config_json() {
+write_config_json_body() {
+    local use_final_rules="${1:-1}"
+    local lb_domain=""
+    if [ "${LOCAL_LOOPBACK_ENABLED:-0}" = "1" ] && validate_domain "${LOCAL_LOOPBACK_DOMAIN:-}"; then
+        lb_domain=$(json_escape "$LOCAL_LOOPBACK_DOMAIN")
+    fi
+
     {
         echo "{"
         echo '  "log": {"loglevel": "warning"},'
         echo "  \"inbounds\": $(build_inbounds_json "$PORT" "$DEST_SNI" "$UUID_DIRECT" "$PRIVATE_KEY" "$SHORT_ID"),"
         echo '  "outbounds": ['
-        echo '    {"protocol": "freedom", "tag": "direct"}'
+        if [ -n "$lb_domain" ]; then
+            echo '    {"protocol": "freedom", "tag": "direct"},'
+            echo '    {'
+            echo '      "protocol": "freedom",'
+            echo '      "tag": "local-vps",'
+            echo '      "settings": {'
+            if [ "$use_final_rules" = "1" ]; then
+                echo '        "redirect": "127.0.0.1:0",'
+                echo '        "finalRules": ['
+                echo '          {'
+                echo '            "action": "allow",'
+                echo '            "network": "tcp,udp",'
+                echo '            "ip": ["127.0.0.1/32"]'
+                echo '          }'
+                echo '        ]'
+            else
+                echo '        "redirect": "127.0.0.1:0"'
+            fi
+            echo '      }'
+            echo '    }'
+        else
+            echo '    {"protocol": "freedom", "tag": "direct"}'
+        fi
         echo '  ],'
         echo '  "routing": {'
         echo '    "rules": ['
+        if [ -n "$lb_domain" ]; then
+            echo '      {'
+            echo '        "type": "field",'
+            echo "        \"domain\": [\"domain:${lb_domain}\"],"
+            echo '        "outboundTag": "local-vps"'
+            echo '      },'
+        fi
         echo '      {'
         echo '        "type": "field",'
         echo '        "network": "tcp,udp",'
@@ -274,6 +328,15 @@ render_config_json() {
         echo '  }'
         echo "}"
     } > "$CONFIG_FILE"
+}
+
+render_config_json() {
+    write_config_json_body 1
+    if [ "${LOCAL_LOOPBACK_ENABLED:-0}" = "1" ] && [ -x "$XRAY_BIN" ]; then
+        if ! "$XRAY_BIN" run -c "$CONFIG_FILE" -test >/dev/null 2>&1; then
+            write_config_json_body 0
+        fi
+    fi
 }
 
 write_service() {
@@ -372,6 +435,11 @@ update_links_info() {
         echo "- 公钥 (pbk): ${PUBLIC_KEY}"
         echo "- ShortId: ${SHORT_ID}"
         echo "- 本机直连 UUID: ${UUID_DIRECT}"
+        if [ "${LOCAL_LOOPBACK_ENABLED:-0}" = "1" ] && [ -n "${LOCAL_LOOPBACK_DOMAIN:-}" ]; then
+            echo "- 本机回环映射: 已开启 (${LOCAL_LOOPBACK_DOMAIN} / *.${LOCAL_LOOPBACK_DOMAIN} -> 127.0.0.1:原端口)"
+        else
+            echo "- 本机回环映射: 未开启"
+        fi
 
         if [ -f "$EXTRA_NODES_FILE" ] && [ -s "$EXTRA_NODES_FILE" ]; then
             echo "=========================================================================="
@@ -395,7 +463,7 @@ write_management_cli() {
     cat > /usr/local/bin/xray << 'EOF_MANAGEMENT_SCRIPT'
 #!/bin/bash
 
-SCRIPT_VERSION="0.0.20"
+SCRIPT_VERSION="0.0.21"
 SCRIPT_URL="https://github.com/justly110/xray/raw/main/rea.sh"
 
 ENV_FILE="/usr/local/etc/xray/params.env"
@@ -424,8 +492,31 @@ env_quote() {
     printf '%s' "$s"
 }
 
+sanitize_domain() {
+    local d="$1"
+    d="${d#http://}"
+    d="${d#https://}"
+    d="${d%%/*}"
+    d="${d%%:*}"
+    d="${d//[[:space:]]/}"
+    printf '%s' "$d"
+}
+
+validate_domain() {
+    local d="$1"
+    [ -n "$d" ] || return 1
+    [[ "$d" != *..* ]] || return 1
+    [[ "$d" =~ ^[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?$ ]]
+}
+
 load_env() {
-    if [ -f "$ENV_FILE" ]; then source "$ENV_FILE"; else echo "❌ 缺少 $ENV_FILE"; exit 1; fi
+    if [ -f "$ENV_FILE" ]; then
+        source "$ENV_FILE"
+        LOCAL_LOOPBACK_ENABLED="${LOCAL_LOOPBACK_ENABLED:-0}"
+        LOCAL_LOOPBACK_DOMAIN="${LOCAL_LOOPBACK_DOMAIN:-}"
+    else
+        echo "❌ 缺少 $ENV_FILE"; exit 1
+    fi
 }
 
 get_status() {
@@ -668,17 +759,51 @@ EOF
     echo "]"
 }
 
-rebuild_and_apply() {
-    echo -e "\n⏳ 正在更新配置并重启 Xray..."
+write_config_json_body() {
+    local use_final_rules="${1:-1}"
+    local lb_domain=""
+    if [ "${LOCAL_LOOPBACK_ENABLED:-0}" = "1" ] && validate_domain "${LOCAL_LOOPBACK_DOMAIN:-}"; then
+        lb_domain=$(json_escape "$LOCAL_LOOPBACK_DOMAIN")
+    fi
+
     {
         echo "{"
         echo '  "log": {"loglevel": "warning"},'
         echo "  \"inbounds\": $(build_inbounds_json "$PORT" "$DEST_SNI" "$UUID_DIRECT" "$PRIVATE_KEY" "$SHORT_ID"),"
         echo '  "outbounds": ['
-        echo '    {"protocol": "freedom", "tag": "direct"}'
+        if [ -n "$lb_domain" ]; then
+            echo '    {"protocol": "freedom", "tag": "direct"},'
+            echo '    {'
+            echo '      "protocol": "freedom",'
+            echo '      "tag": "local-vps",'
+            echo '      "settings": {'
+            if [ "$use_final_rules" = "1" ]; then
+                echo '        "redirect": "127.0.0.1:0",'
+                echo '        "finalRules": ['
+                echo '          {'
+                echo '            "action": "allow",'
+                echo '            "network": "tcp,udp",'
+                echo '            "ip": ["127.0.0.1/32"]'
+                echo '          }'
+                echo '        ]'
+            else
+                echo '        "redirect": "127.0.0.1:0"'
+            fi
+            echo '      }'
+            echo '    }'
+        else
+            echo '    {"protocol": "freedom", "tag": "direct"}'
+        fi
         echo '  ],'
         echo '  "routing": {'
         echo '    "rules": ['
+        if [ -n "$lb_domain" ]; then
+            echo '      {'
+            echo '        "type": "field",'
+            echo "        \"domain\": [\"domain:${lb_domain}\"],"
+            echo '        "outboundTag": "local-vps"'
+            echo '      },'
+        fi
         echo '      {'
         echo '        "type": "field",'
         echo '        "network": "tcp,udp",'
@@ -688,6 +813,16 @@ rebuild_and_apply() {
         echo '  }'
         echo "}"
     } > "$CONFIG_FILE"
+}
+
+rebuild_and_apply() {
+    echo -e "\n⏳ 正在更新配置并重启 Xray..."
+    write_config_json_body 1
+    if [ "${LOCAL_LOOPBACK_ENABLED:-0}" = "1" ] && [ -x "$XRAY_BIN" ]; then
+        if ! "$XRAY_BIN" run -c "$CONFIG_FILE" -test >/dev/null 2>&1; then
+            write_config_json_body 0
+        fi
+    fi
 
     {
         echo "PORT=\"$(env_quote "$PORT")\""
@@ -696,6 +831,8 @@ rebuild_and_apply() {
         echo "PUBLIC_KEY=\"$(env_quote "$PUBLIC_KEY")\""
         echo "PRIVATE_KEY=\"$(env_quote "$PRIVATE_KEY")\""
         echo "SHORT_ID=\"$(env_quote "$SHORT_ID")\""
+        echo "LOCAL_LOOPBACK_ENABLED=\"$(env_quote "${LOCAL_LOOPBACK_ENABLED:-0}")\""
+        echo "LOCAL_LOOPBACK_DOMAIN=\"$(env_quote "${LOCAL_LOOPBACK_DOMAIN:-}")\""
     } > "$ENV_FILE"
 
     do_restart
@@ -720,6 +857,11 @@ rebuild_and_apply() {
         echo "- 公钥 (pbk): ${PUBLIC_KEY}"
         echo "- ShortId: ${SHORT_ID}"
         echo "- 本机直连 UUID: ${UUID_DIRECT}"
+        if [ "${LOCAL_LOOPBACK_ENABLED:-0}" = "1" ] && [ -n "${LOCAL_LOOPBACK_DOMAIN:-}" ]; then
+            echo "- 本机回环映射: 已开启 (${LOCAL_LOOPBACK_DOMAIN} / *.${LOCAL_LOOPBACK_DOMAIN} -> 127.0.0.1:原端口)"
+        else
+            echo "- 本机回环映射: 未开启"
+        fi
 
         if [ -f "$EXTRA_NODES_FILE" ] && [ -s "$EXTRA_NODES_FILE" ]; then
             echo "=========================================================================="
@@ -742,10 +884,64 @@ rebuild_and_apply() {
     read -n 1 -s -r -p "按任意键返回管理菜单..." </dev/tty
 }
 
+configure_local_loopback() {
+    while true; do
+        clear
+        local lb_status="已关闭"
+        if [ "${LOCAL_LOOPBACK_ENABLED:-0}" = "1" ] && [ -n "${LOCAL_LOOPBACK_DOMAIN:-}" ]; then
+            lb_status="已开启 (${LOCAL_LOOPBACK_DOMAIN} -> 127.0.0.1:原端口)"
+        fi
+        echo "=========================================="
+        echo "      本机回环自定义域名 (127.0.0.1)      "
+        echo "=========================================="
+        echo "作用: 代理中访问 自编域名:任意端口 时直连本机 127.0.0.1:对应端口"
+        echo "当前状态: ${lb_status}"
+        echo "------------------------------------------"
+        echo " 1. 开启 / 修改本机回环域名 (支持主域名及子域名)"
+        echo " 2. 关闭本机回环域名映射"
+        echo " 0. 返回上一级"
+        echo "=========================================="
+        read -p "请输入选项 [0-2]: " lb_opt </dev/tty
+        case "$lb_opt" in
+            1)
+                local def_domain="${LOCAL_LOOPBACK_DOMAIN:-vps.ai}"
+                read -p "请输入自定义域名 (直接回车默认 ${def_domain}): " input_lb </dev/tty
+                input_lb="${input_lb:-$def_domain}"
+                input_lb=$(sanitize_domain "$input_lb")
+                if validate_domain "$input_lb"; then
+                    LOCAL_LOOPBACK_ENABLED="1"
+                    LOCAL_LOOPBACK_DOMAIN="$input_lb"
+                    rebuild_and_apply
+                    return 0
+                else
+                    echo -e "\033[31m域名格式不合法，请输入纯域名（如 vps.ai）！\033[0m"
+                    sleep 1
+                fi
+                ;;
+            2)
+                if [ "${LOCAL_LOOPBACK_ENABLED:-0}" = "0" ]; then
+                    echo -e "\033[33m当前已处于关闭状态。\033[0m"
+                    sleep 1
+                else
+                    LOCAL_LOOPBACK_ENABLED="0"
+                    rebuild_and_apply
+                    return 0
+                fi
+                ;;
+            0) return 1 ;;
+            *) echo -e "\033[31m无效输入！\033[0m"; sleep 1 ;;
+        esac
+    done
+}
+
 modify_config() {
     load_env
     while true; do
         clear
+        local lb_summary="已关闭"
+        if [ "${LOCAL_LOOPBACK_ENABLED:-0}" = "1" ] && [ -n "${LOCAL_LOOPBACK_DOMAIN:-}" ]; then
+            lb_summary="已开启 -> ${LOCAL_LOOPBACK_DOMAIN}"
+        fi
         echo "=========================================="
         echo "           修改 Xray 节点配置             "
         echo "=========================================="
@@ -758,9 +954,12 @@ modify_config() {
         echo " 4. 重新生成【本机直连】UUID"
         echo " 5. 手动输入新的【本机直连】UUID"
         echo "------------------------------------------"
+        echo " [分流与本机回环]"
+        echo " 6. 本机回环自定义域名开关 (当前: ${lb_summary})"
+        echo "------------------------------------------"
         echo " 0. 返回主菜单"
         echo "=========================================="
-        read -p "请输入选项 [0-5]: " opt </dev/tty
+        read -p "请输入选项 [0-6]: " opt </dev/tty
         case "$opt" in
             1)
                 read -p "请输入新的端口 (1-65535): " new_port </dev/tty
@@ -791,6 +990,7 @@ modify_config() {
                 read -p "请输入新的【本机直连】UUID: " custom_uid_dir </dev/tty
                 [ -n "$custom_uid_dir" ] && { UUID_DIRECT="$custom_uid_dir"; rebuild_and_apply; break; }
                 ;;
+            6) configure_local_loopback && break ;;
             0) break ;;
             *) echo -e "\033[31m无效输入！\033[0m"; sleep 1 ;;
         esac
@@ -980,7 +1180,7 @@ main_menu() {
         echo " 2. 启动 Xray"
         echo " 3. 停止 Xray"
         echo " 4. 查看全部节点链接及详细配置"
-        echo " 5. 修改主节点配置 (端口/SNI/UUID/密钥)"
+        echo " 5. 修改节点与分流配置 (端口/SNI/UUID/回环域名)"
         echo " 6. TCP BBR 加速与网络调优"
         echo " 7. 检查与升级 (Xray内核 / 管理脚本)"
         echo " 8. 查看运行日志"
@@ -1019,6 +1219,8 @@ if is_config_complete; then
     echo -e "\033[32m✔ 检测到本机已存在完整的 Xray Reality 配置！\033[0m"
     echo "=========================================================="
     source "$ENV_FILE"
+    LOCAL_LOOPBACK_ENABLED="${LOCAL_LOOPBACK_ENABLED:-0}"
+    LOCAL_LOOPBACK_DOMAIN="${LOCAL_LOOPBACK_DOMAIN:-}"
     echo "  - 端口: $PORT"
     echo "  - 伪装 SNI: $DEST_SNI"
     echo "  - 本机直连 UUID: $UUID_DIRECT"
@@ -1073,6 +1275,8 @@ SHORT_ID=$(openssl rand -hex 8)
 
 DEST_SNI="www.java.com"
 PORT=443
+LOCAL_LOOPBACK_ENABLED="0"
+LOCAL_LOOPBACK_DOMAIN=""
 
 save_params_env
 

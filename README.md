@@ -2,7 +2,7 @@
 
 # ⚡ Xray 极速一键部署脚本集
 
-**Reality 直连版** · **Reality + Caddy 共存版** · **Reality 双栈版** · **Cloudflare 隧道版 (Argo)**
+**Reality 直连版** · **Reality + Caddy 共存版** · **Cloudflare 隧道版 (Argo)**
 
 轻量 · 高性能 · 深度网络调优 · 极简交互 · 64MB 小鸡可用
 
@@ -17,16 +17,15 @@
 
 ## 📖 项目简介
 
-本项目提供四套一键部署方案，覆盖公网直连、同端口建站伪装、IPv4/IPv6 双栈以及无公网 IP 隧道等常见场景：
+本项目提供三套一键部署方案，覆盖公网直连、同端口建站伪装以及无公网 IP 隧道等常见场景：
 
 | 方案 | 脚本 | 方案说明 | 适用场景 |
 | :--- | :--- | :--- | :--- |
 | **方案一** | [`rea.sh`](rea.sh) | **VLESS + Reality + Vision 直连（纯 IPv4）** | 有公网 IPv4 的常规 VPS，追求速度、简洁与高稳定性 |
 | **方案二** | [`rea-caddy.sh`](rea-caddy.sh) | **VLESS + Reality + Caddy 443 共存（偷自己）** | 本机有网站/反代（如 New-API 3000 端口），想共用 443 并用自有域名伪装（仅 Debian/Ubuntu + x86_64） |
-| **方案三** | [`rea-dual.sh`](rea-dual.sh) | **VLESS + Reality + Vision 双栈（IPv4 + IPv6）** | 同时有公网 IPv4 和 IPv6 的 VPS，独立端口双栈接入、出站统一 `UseIPv4` |
-| **方案四** | [`argo.sh`](argo.sh) | **Xray + Cloudflare 临时/固定隧道 (Argo)** | **64MB 内存小鸡**、NAT 无公网端口、家宽动态 IP、IP 被墙但能连 Cloudflare |
+| **方案三** | [`argo.sh`](argo.sh) | **Xray + Cloudflare 临时/固定隧道 (Argo)** | **64MB 内存小鸡**、NAT 无公网端口、家宽动态 IP、IP 被墙但能连 Cloudflare |
 
-> **注意**：`rea.sh`、`rea-caddy.sh`、`rea-dual.sh` 均使用 `/usr/local/etc/xray` 与 `xray` 管理命令（三者选其一部署或切换升级）；`argo.sh` 使用独立目录与 `argo` 命令，可与任意 Reality 方案共存。
+> **注意**：`rea.sh` 与 `rea-caddy.sh` 均使用 `/usr/local/etc/xray` 与 `xray` 管理命令（两者选其一部署或切换升级）；`argo.sh` 使用独立目录与 `argo` 命令，可与任意 Reality 方案共存。
 
 ---
 
@@ -38,7 +37,7 @@
   - 开启 **TCP Fast Open** 与 TCP KeepAlive，禁用无用服务端嗅探，降低握手延迟与资源开销。
 - 🛡️ **纯粹原生安全**：
   - Reality 系列基于最新官方规范：`VLESS` + `Reality` + `xtls-rprx-vision`。
-  - `rea.sh` / `rea-dual.sh` 支持**修改 SNI 自动握手体检**（TLS 1.3 支持与证书体积检测，防超 8KB 缓冲区）。
+  - `rea.sh` 支持**修改 SNI 自动握手体检**（TLS 1.3 支持与证书体积检测，防超 8KB 缓冲区）。
   - `rea-caddy.sh` 实现“**443 偷自己**”：Xray 占公网 443，Caddy 自动退守 `127.0.0.1:8443`（保留 80 端口续签证书），内置 `?secret=` 暗号开门 + Cookie + API Key 前缀三重防护，未授权请求统一返回 `404`。
   - `argo.sh` Xray 仅监听 `127.0.0.1`，外部无法直连，并拦截内网地址防 SSRF。
 - 🖥️ **全终端命令行后台**：
@@ -151,57 +150,7 @@ Caddy状态: ● 正在运行 (Running)
 
 ---
 
-## 🔀 方案三：VLESS-Reality 双栈直连版（rea-dual.sh）
-
-> **适用场景**：同时拥有公网 IPv4 与 IPv6 的 VPS（支持 Debian / Ubuntu / Alpine，`x86_64` / `arm64`），需要**同时输出 IPv4 与 IPv6 两条节点链接**，分别应付不同网络环境。
-
-### 1. 一键快速安装
-
-```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/justly110/xray/main/rea-dual.sh)
-```
-
-> **备用命令（通过 wget）：**
-> ```bash
-> wget -O rea-dual.sh https://raw.githubusercontent.com/justly110/xray/main/rea-dual.sh && bash rea-dual.sh
-> ```
-
-### 2. 特性与工作原理
-
-- **双栈独立端口监听**：IPv4 监听 `0.0.0.0:443`，IPv6 启用 `v6only` 监听 `[::]:8443`（可在菜单中分别修改端口），避免 Xray 默认双栈占位引起绑定冲突。
-- **出站统一 `UseIPv4`**：无论客户端从 IPv4 还是 IPv6 入口连入，出站策略统一优先走 IPv4（纯 IPv6 目标自动回退），避免访问流媒体或 AI 服务时 IPv4/IPv6 横跳触发风控。
-- **双链接自动生成**：`link.txt` 同时输出 `-v4` 与 `-v6` 两条节点链接；若机器未开启 IPv6 则自动退化为仅监听 IPv4。
-
-### 3. 管理面板
-
-```bash
-xray
-```
-
-```text
-==========================================
-     Xray-Reality 双栈节点管理后台        
-==========================================
-程序版本: 脚本 v0.0.3 | 内核 v26.10.21
-服务状态: ● 正在运行 (Running)
-网络协议: IPv4 + IPv6 双栈
-------------------------------------------
- 1. 重启 Xray
- 2. 启动 Xray
- 3. 停止 Xray
- 4. 查看全部节点链接及详细配置
- 5. 修改主节点配置 (端口/SNI/UUID/密钥)
- 6. TCP BBR 加速与网络调优
- 7. 检查与升级 (Xray内核 / 管理脚本)
- 8. 查看运行日志
- 9. 彻底卸载 Xray
- 0. 退出菜单
-==========================================
-```
-
----
-
-## ☁️ 方案四：Cloudflare 临时隧道版（argo.sh）
+## ☁️ 方案三：Cloudflare 临时隧道版（argo.sh）
 
 > **典型用户**：64MB 内存的 Alpine 小鸡、只有 IPv6 的机器、NAT 小鸡没有任何可用入站端口、家宽动态 IP、IP 被墙但能访问 Cloudflare 的机器。
 > 不需要公网 IP、不需要开放入站端口、不需要域名，也不需要 Cloudflare 账号。
@@ -296,7 +245,7 @@ argo --link
 
 ## 📁 核心文件与路径说明
 
-### Reality 系列（`rea.sh` / `rea-caddy.sh` / `rea-dual.sh`）
+### Reality 系列（`rea.sh` / `rea-caddy.sh`）
 
 | 文件路径 | 说明 |
 | :--- | :--- |
@@ -331,7 +280,7 @@ argo --link
 
 | 脚本 | 支持系统 | 支持架构 |
 | :--- | :--- | :--- |
-| `rea.sh` / `rea-dual.sh` | Debian 10+ / Ubuntu 20.04+ / Alpine 3.16+ | `x86_64` / `arm64` |
+| `rea.sh` | Debian 10+ / Ubuntu 20.04+ / Alpine 3.16+ | `x86_64` / `arm64` |
 | `rea-caddy.sh` | Debian 10+ / Ubuntu 20.04+（systemd） | `x86_64` |
 | `argo.sh` | Debian 10+ / Ubuntu 20.04+ / Alpine 3.16+ | `x86_64` / `arm64` / `armv7` |
 
